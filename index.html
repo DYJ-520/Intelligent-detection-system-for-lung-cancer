@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CT影像肺结节3D诊断系统</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+        .container { max-width: 1600px; margin: 0 auto; padding: 20px; }
+        .header { text-align: center; color: white; margin-bottom: 40px; }
+        .header h1 { font-size: 2.5em; margin-bottom: 10px; text-shadow: 2px 2px 4px rgba(0,0,0,0.3); }
+        .header p { font-size: 1.2em; opacity: 0.9; }
+        .main-content { display: grid;
+                        grid-template-columns: 1fr; /* 改为单列 */
+                        gap: 30px;
+                        margin-bottom: 40px; }
+        .upload-section, .results-section { background: white; padding: 30px; border-radius: 15px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); }
+        .upload-area { border: 3px dashed #667eea; border-radius: 10px; padding: 60px 20px; text-align: center; cursor: pointer; transition: all 0.3s ease; position: relative; }
+        .upload-area:hover { border-color: #764ba2; background: rgba(102, 126, 234, 0.05); }
+        .upload-area.dragover { border-color: #764ba2; background: rgba(102, 126, 234, 0.1); transform: scale(1.02); }
+        .upload-icon { font-size: 3em; color: #667eea; margin-bottom: 20px; }
+        .upload-text { font-size: 1.1em; margin-bottom: 10px; color: #666; }
+        .upload-hint { font-size: 0.9em; color: #999; }
+        .file-input { display: none; }
+        .file-info { display: none; margin-top: 20px; padding: 15px; background: #f8f9fa; border-radius: 8px; border-left: 4px solid #667eea; }
+        .analyze-btn { background: linear-gradient(135deg, #667eea, #764ba2); color: white; border: none; padding: 12px 30px; border-radius: 25px; font-size: 1em; cursor: pointer; transition: all 0.3s ease; margin-top: 15px; }
+        .analyze-btn:hover { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4); }
+        .analyze-btn:disabled { background: #ccc; cursor: not-allowed; transform: none; box-shadow: none; }
+        .results-section h2 { color: #333; margin-bottom: 20px; font-size: 1.5em; }
+        .stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; margin-bottom: 30px; }
+        .stat-card { background: linear-gradient(135deg, #667eea, #764ba2); color: white; padding: 20px; border-radius: 10px; text-align: center; }
+        .stat-number { font-size: 2em; font-weight: bold; margin-bottom: 5px; }
+        .stat-label { font-size: 0.9em; opacity: 0.9; }
+        .nodule-list { max-height: 500px; overflow-y: auto; }
+        .nodule-item { background: #f8f9fa; padding: 15px; margin-bottom: 10px; border-radius: 8px; border-left: 4px solid #667eea; cursor: pointer; transition: background-color 0.2s ease; }
+        .nodule-item:hover { background-color: #f0f2f5; }
+        .nodule-item.suspicious { border-left-color: #dc3545; }
+        .nodule-summary { display: flex; justify-content: space-between; align-items: center; }
+        .nodule-position { font-size: 0.9em; color: #666; }
+        .nodule-probs { display: flex; gap: 15px; }
+        .prob-item { font-size: 0.9em; }
+        .prob-value { font-weight: bold; color: #667eea; }
+        .prob-value.high { color: #dc3545; }
+        .visualize-toggle-icon { font-size: 1.2em; color: #667eea; margin-left: 10px; transition: transform 0.3s ease; }
+        .nodule-item.expanded .visualize-toggle-icon { transform: rotate(90deg); }
+        .nodule-visualization-3d { display: none; margin-top: 15px; height: 400px; background-color: #111; border-radius: 8px; position: relative; overflow: hidden; }
+        .nodule-visualization-3d .init-prompt { color: #ccc; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); }
+        .nodule-item.expanded .nodule-visualization-3d { display: block; }
+        .loading { display: none; text-align: center; padding: 40px; }
+        .loading-spinner { border: 4px solid #f3f3f3; border-top: 4px solid #667eea; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 0 auto 20px; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .error-message { background: #f8d7da; color: #721c24; padding: 15px; border-radius: 8px; margin-top: 20px; display: none; }
+        .reset-btn { background: #6c757d; color: white; border: none; padding: 10px 20px; border-radius: 20px; cursor: pointer; margin-top: 15px; }
+        .reset-btn:hover { background: #5a6268; }
+        @media (max-width: 992px) { .main-content { grid-template-columns: 1fr; } }
+        @media (max-width: 768px) { .stats-grid { grid-template-columns: 1fr; } }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>CT影像肺结节3D诊断系统</h1>
+            <p>基于深度学习的智能诊断平台 - 准确、快速、可靠</p>
+        </div>
+
+        <div class="main-content">
+            <div class="upload-section">
+                <h2>1. 上传CT影像</h2>
+                <div class="upload-area" id="uploadArea">
+                    <div class="upload-icon">⬆️</div>
+                    <div class="upload-text">点击或拖拽上传CT文件</div>
+                    <div class="upload-hint">支持.zip格式 (内含.mhd和.raw或.dcm文件)</div>
+                    <input type="file" class="file-input" id="fileInput" accept=".zip">
+                </div>
+
+                <div class="file-info" id="fileInfo">
+                    <div>已选择文件：<span id="fileName"></span></div>
+                    <button class="analyze-btn" id="analyzeBtn" disabled>开始分析</button>
+                    <button class="reset-btn" id="resetBtn">重新选择</button>
+                </div>
+                <div class="error-message" id="errorMessage"></div>
+            </div>
+
+            <div class="results-section">
+                <h2>2. 诊断结果</h2>
+                <div class="stats-grid">
+                    <div class="stat-card"><div class="stat-number" id="totalNodules">0</div><div class="stat-label">检测到的结节总数</div></div>
+                    <div class="stat-card"><div class="stat-number" id="benignNodules">0</div><div class="stat-label">良性或低风险</div></div>
+                    <div class="stat-card"><div class="stat-number" id="suspiciousNodules">0</div><div class="stat-label">可疑恶性结节</div></div>
+                </div>
+                <h3>结节详细信息 (点击可展开3D视图)</h3>
+                <div class="nodule-list" id="noduleList">
+                    <div class="loading" id="loadingSection">
+                        <div class="loading-spinner"></div>
+                        <div>正在分析CT影像，请稍候...</div>
+                    </div>
+                </div>
+
+                <div id="threeJsContainer" style="width:100%; height:600px; background:#111; border-radius: 8px; margin-top: 20px;">
+                    <div style="color: #ccc; text-align: center; padding-top: 180px;">请点击左侧结节列表项查看3D视图</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 配置后端API的地址
+        const API_BASE_URL = 'http://127.0.0.1:5000';
+
+        // 获取所有需要的DOM元素
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+        const fileInfo = document.getElementById('fileInfo');
+        const fileNameEl = document.getElementById('fileName'); // Changed to fileNameEl to avoid conflict
+        const analyzeBtn = document.getElementById('analyzeBtn');
+        const resetBtn = document.getElementById('resetBtn');
+        const errorMessage = document.getElementById('errorMessage');
+        const loadingSection = document.getElementById('loadingSection');
+        const noduleList = document.getElementById('noduleList');
+        const totalNodules = document.getElementById('totalNodules');
+        const benignNodules = document.getElementById('benignNodules');
+        const suspiciousNodules = document.getElementById('suspiciousNodules');
+        const threeJsContainer = document.getElementById('threeJsContainer'); // New 3D container
+
+        let selectedFile = null;
+        let analysisData = {}; // Store complete data from backend
+
+        // 格式化概率，使其更易读
+        function formatProbability(prob) {
+            // 将 prob 乘以 100 后再与 0.1 比较，解决浮点数精度和显示问题
+            if (prob * 100 > 0 && prob * 100 < 0.1) return '&lt;0.1%'; // 修复了这里的逻辑
+            return `${(prob * 100).toFixed(1)}%`;
+        }
+
+        // --- 事件监听器设置 ---
+        uploadArea.addEventListener('click', () => fileInput.click());
+        uploadArea.addEventListener('dragover', e => { e.preventDefault(); uploadArea.classList.add('dragover'); });
+        uploadArea.addEventListener('dragleave', e => { e.preventDefault(); uploadArea.classList.remove('dragover'); });
+        uploadArea.addEventListener('drop', handleDrop);
+        fileInput.addEventListener('change', handleFileSelect);
+        analyzeBtn.addEventListener('click', handleAnalyze);
+        resetBtn.addEventListener('click', resetUpload);
+
+        function handleDrop(e) {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            if (e.dataTransfer.files.length > 0) handleFileSelect({ target: { files: e.dataTransfer.files } });
+        }
+
+        function handleFileSelect(e) {
+            const file = e.target.files[0];
+            if (!file || !file.name.toLowerCase().endsWith('.zip')) {
+                showError('不支持的文件格式。请上传.zip格式的文件 (内含.mhd和.raw或.dcm文件)。');
+                return;
+            }
+            selectedFile = file;
+            fileNameEl.textContent = file.name;
+            fileInfo.style.display = 'block';
+            uploadArea.style.display = 'none';
+            analyzeBtn.disabled = false;
+            hideError();
+        }
+
+        async function handleAnalyze() {
+            if (!selectedFile) return;
+            setLoading(true); // 进入加载状态
+            try {
+                const formData = new FormData();
+                formData.append('file', selectedFile);
+                const response = await fetch(`${API_BASE_URL}/predict`, { method: 'POST', body: formData });
+                if (!response.ok) {
+                    const errData = await response.json().catch(() => ({error: `服务器错误: ${response.statusText}`}));
+                    throw new Error(errData.error);
+                }
+                const data = await response.json();
+                if (data.error) throw new Error(data.error);
+                analysisData = data; // 保存完整数据
+
+                displayResults(data.nodules); // 展示结节列表
+
+                // 初始化 3D 视图，只传入肺部网格数据和所有结节的精简信息
+                // 具体的结节高亮通过点击列表项触发
+                if (typeof init3DViewer === 'function') {
+                    init3DViewer(threeJsContainer, data.lung_mesh, data.nodules);
+                } else {
+                    console.warn("未找到 init3DViewer 函数。请确保已引入 3D 渲染库和函数。");
+                    console.log("收到的 3D 显示数据 (请在控制台查看):", data.display_data);
+                }
+
+            } catch (error) {
+                console.error('分析失败:', error);
+                showError('分析失败：' + error.message);
+            } finally {
+                setLoading(false); // 结束加载状态
+            }
+        }
+
+        function displayResults(results) {
+            if (!results) {
+                noduleList.innerHTML = '<div style="text-align: center; color: #666; padding: 20px;">无有效结果返回</div>';
+                return;
+            }
+            if (results.length === 0) {
+                totalNodules.textContent = '0';
+                noduleList.innerHTML = '<div style="text-align: center; color: #666; padding: 20px;">恭喜，未在本CT影像中检测到明显结节。</div>';
+                benignNodules.textContent = '0'; // Clear stats
+                suspiciousNodules.textContent = '0'; // Clear stats
+                return;
+            }
+
+            let suspiciousCount = results.filter(r => r.malignancy_prob > 0.5).length;
+            totalNodules.textContent = results.length;
+            benignNodules.textContent = results.length - suspiciousCount;
+            suspiciousNodules.textContent = suspiciousCount;
+
+            noduleList.innerHTML = results.map((result, index) => `
+                <div class="nodule-item ${result.malignancy_prob > 0.5 ? 'suspicious' : ''}" data-index="${index}">
+                    <div class="nodule-summary">
+                        <div class="nodule-info">
+                            <div class="nodule-position">结节 ${index + 1} - 患者坐标: (${result.position.map(p => p.toFixed(2)).join(', ')})</div>
+                            <div class="nodule-probs">
+                                <div class="prob-item">结节概率: <span class="prob-value">${formatProbability(result.nodule_prob)}</span></div>
+                                <div class="prob-item">恶性概率: <span class="prob-value ${result.malignancy_prob > 0.5 ? 'high' : ''}">${formatProbability(result.malignancy_prob)}</span></div>
+                            </div>
+                        </div>
+                        <span class="visualize-toggle-icon">▶</span>
+                    </div>
+                </div>`).join('');
+
+            document.querySelectorAll('.nodule-item').forEach(item => item.addEventListener('click', handleNoduleClick));
+        }
+
+        function handleNoduleClick(event) {
+            const item = event.currentTarget;
+            const index = parseInt(item.dataset.index, 10);
+
+            // 移除其他展开的项的 'expanded' 类
+            document.querySelectorAll('.nodule-item.expanded').forEach(expandedItem => {
+                if (expandedItem !== item) {
+                    expandedItem.classList.remove('expanded');
+                }
+            });
+
+            item.classList.toggle('expanded'); // Toggle current item's expanded class
+
+            if (item.classList.contains('expanded')) {
+                // Highlighting the selected nodule in 3D
+                if (typeof highlightNoduleIn3D === 'function') {
+                    highlightNoduleIn3D(index); // Pass the index of the nodule to highlight
+                }
+            } else {
+                // If collapsed, clear specific nodule highlight or reset
+                if (typeof clearNoduleHighlightIn3D === 'function') {
+                    clearNoduleHighlightIn3D();
+                }
+            }
+        }
+
+        function setLoading(isLoading) {
+            analyzeBtn.disabled = isLoading;
+            analyzeBtn.textContent = isLoading ? '分析中...' : '开始分析';
+            loadingSection.style.display = isLoading ? 'block' : 'none';
+            if (isLoading) {
+                totalNodules.textContent = '0';
+                benignNodules.textContent = '0';
+                suspiciousNodules.textContent = '0';
+                noduleList.innerHTML = '';
+            }
+        }
+
+        function resetUpload() {
+            selectedFile = null;
+            fileInput.value = '';
+            fileInfo.style.display = 'none';
+            uploadArea.style.display = 'block';
+            analyzeBtn.disabled = true;
+            hideError();
+            setLoading(false);
+            analysisData = {};
+            noduleList.innerHTML = '';
+            totalNodules.textContent = '0';
+            benignNodules.textContent = '0';
+            suspiciousNodules.textContent = '0';
+            clear3DVisualization(); // Also clear 3D
+        }
+
+        function showError(message) { errorMessage.textContent = message; errorMessage.style.display = 'block'; }
+        function hideError() { errorMessage.style.display = 'none'; }
+
+        // Page load health check
+        window.addEventListener('load', async () => {
+            try {
+                const response = await fetch(`${API_BASE_URL}/health`);
+                if (!response.ok) throw new Error('后端服务不可用');
+                console.log('后端连接正常');
+            } catch (error) {
+                console.warn('后端连接失败:', error);
+                showError('无法连接到后端服务，请确保后端服务正在运行 (http://localhost:5000)');
+            }
+        });
+
+         // =================================================================
+        // 3D 可视化相关的 JavaScript 代码 (Three.js)
+        // =================================================================
+
+        // 声明 Three.js 核心组件的全局变量
+        let scene;     // 3D 场景，所有物体、光源、摄像机都在这里面
+        let camera;    // 摄像机，决定我们从哪个角度看场景
+        let renderer;  // 渲染器，将 3D 场景绘制到 HTML 的 canvas 元素上
+        let controls;  // 控制器，处理用户与 3D 场景的交互（旋转、缩放、平移）
+
+        let lungMesh = null; // 用于存储肺部 3D 网格的 Three.js Mesh 对象
+        let noduleSpheres = []; // 数组，用于存储 Three.js 球体对象，代表结节
+
+        // 定义用于不同状态结节的材质
+        let highlightMaterial = new THREE.MeshStandardMaterial({ color: 0xffa500, transparent: true, opacity: 0.8 }); // 高亮结节的材质：橙色，半透明
+        let defaultNoduleMaterial = new THREE.MeshStandardMaterial({ color: 0xff0000, transparent: true, opacity: 0.8 }); // 默认结节的材质：红色，半透明
+
+        /**
+         * 初始化 3D 查看器，这是生成 3D 图像的核心函数。
+         * 在后端分析数据成功返回后调用此函数。
+         * @param {HTMLElement} container - 渲染器要附加到的 DOM 元素（即 #threeJsContainer）。
+         * @param {object} lung_mesh_data - 包含肺部 3D 网格顶点和面数据的对象，格式为 {vertices: [], faces: []}。
+         * @param {Array<object>} nodules_summary_data - 结节的摘要信息数组 {position: [], diameter_mm: ...}。
+         */
+        function init3DViewer(container, lung_mesh_data, nodules_summary_data) {
+            // **第一步：清理现有视图 (如果存在)**
+            // 每次重新分析时，确保销毁旧的渲染器实例，避免资源泄露和视图重叠。
+            if (renderer) {
+                renderer.dispose(); // 释放 WebGL 上下文及其所有相关内存。
+                // 移除容器中现有的 canvas 元素，确保容器干净。
+                while(container.firstChild) {
+                    container.removeChild(container.firstChild);
+                }
+            }
+
+            // **第二步：创建 3D 场景基本元素**
+            // 创建一个新的 Three.js 场景，它是所有 3D 物体、光源和相机的容器。
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x111111); // 设置场景的背景颜色为深灰色。
+
+            // 创建透视摄像机 (PerspectiveCamera)。
+            // 参数：视场角 (60度)，宽高比，近裁剪面 (1单位)，远裁剪面 (5000单位)。
+            camera = new THREE.PerspectiveCamera(60, container.clientWidth / container.clientHeight, 1, 5000);
+
+            // 创建 WebGL 渲染器 (WebGLRenderer)，它是将 3D 场景绘制到屏幕上的画师。
+            // `antialias: true` 开启抗锯齿，使边缘更平滑。
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(container.clientWidth, container.clientHeight); // 设置渲染器输出的 canvas 尺寸。
+            renderer.setPixelRatio(window.devicePixelRatio); // 设置设备像素比，以适应高DPI屏幕。
+            container.appendChild(renderer.domElement); // 将渲染器创建的 canvas 元素添加到 HTML 容器中。
+
+            // **第三步：设置用户交互控制器**
+            // 创建轨道控制器 (OrbitControls)，允许用户通过鼠标旋转、缩放、平移 3D 场景。
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true; // 启用阻尼效果，使交互更平滑。
+            controls.dampingFactor = 0.05; // 阻尼因子。
+            controls.screenSpacePanning = false; // 禁用屏幕空间平移。
+            controls.minDistance = 10; // 最小缩放距离。
+            controls.maxDistance = 500; // 最大缩放距离。
+
+            // **第四步：添加光照**
+            // 添加环境光，均匀照亮场景中的所有物体，提供基础照明。
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.8); // 白色，强度0.8。
+            scene.add(ambientLight);
+            // 添加方向光，模拟太阳光，有方向性。
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.4); // 白色，强度0.4。
+            directionalLight.position.set(0, 1, 1).normalize(); // 设置光源方向。
+            scene.add(directionalLight);
+
+            // **第五步：创建模型组**
+            // 使用一个组来管理整个模型（肺部和结节），方便整体操作和变换。
+            const group = new THREE.Group();
+
+            // **第六步：渲染肺部网格**
+            // 获取后端传来的肺部网格的顶点数据和面索引数据。
+            const lungVertices = lung_mesh_data.vertices;
+            const lungFaces = lung_mesh_data.faces;
+
+            // 检查肺部数据是否有效。
+            if (lungVertices && lungVertices.length > 0 && lungFaces && lungFaces.length > 0) { //检查点和三角面是否为空
+                const lungGeometry = new THREE.BufferGeometry(); // 创建 Three.js 几何体对象。
+                // 设置几何体的顶点位置属性。
+                lungGeometry.setAttribute('position', new THREE.Float32BufferAttribute(lungVertices, 3));
+                // 设置几何体的面索引属性，定义三角形。
+                lungGeometry.setIndex(new THREE.Uint32BufferAttribute(lungFaces, 1));
+                lungGeometry.computeVertexNormals(); // 计算顶点法线，用于正确的光照效果。
+
+                // 定义肺部材质：半透明的蓝色，双面渲染，禁用深度写入以避免透明物体裁剪问题。
+                const lungMaterial = new THREE.MeshStandardMaterial({
+                    color: 0x4a7dAB,      // 肺部颜色为蓝色。
+                    transparent: true,    // 允许材质透明。
+                    opacity: 0.2,         // 设置透明度为0.2，以便能看到内部的结节。
+                    side: THREE.DoubleSide, // 双面渲染。
+                    depthWrite: false,    // 禁用深度写入。
+                });
+                lungMesh = new THREE.Mesh(lungGeometry, lungMaterial); // 使用几何体和材质创建肺部网格对象。
+                group.add(lungMesh); // 将肺部网格添加到模型组中。
+            }
+
+            // **第七步：添加辅助元素 (坐标轴)**
+            // 添加坐标轴辅助器，显示X（红）、Y（绿）、Z（蓝）轴，帮助理解模型方向。
+            const axesHelper = new THREE.AxesHelper(100); // 长度100单位。
+            scene.add(axesHelper);
+
+            // **第八步：调整模型方向**
+            // 医学影像的Z轴通常向上，Three.js 的Y轴向上。
+            // 绕X轴旋转-90度（-Math.PI / 2 弧度），将模型从医学坐标系对齐到 Three.js 的默认坐标系。
+            group.rotation.x = -Math.PI / 2;
+            scene.add(group); // 将整个调整后的模型组添加到场景中。
+
+            // **第九步：自动调整相机视角**
+            // 计算整个模型组的包围盒。
+            const box = new THREE.Box3().setFromObject(group);
+            const center = box.getCenter(new THREE.Vector3()); // 获取包围盒中心点。
+            const size = box.getSize(new THREE.Vector3());     // 获取包围盒尺寸。
+            const maxDim = Math.max(size.x, size.y, size.z);     // 获取最大维度，用于计算相机距离。
+
+            camera.position.copy(center); // 将相机位置移动到模型中心。
+            camera.position.z += maxDim * 1.5; // 将相机沿Z轴向后移动，以看到整个模型。
+            camera.lookAt(center); // 使相机看向模型中心。
+
+            controls.target.copy(center); // 将控制器焦点设置到模型中心。
+            controls.update(); // 更新控制器，应用新的目标和相机位置。
+
+            // **第十步：响应窗口大小变化**
+            // 监听浏览器窗口大小变化事件，自动调整相机宽高比和渲染器尺寸，确保3D视图适应新的布局。
+            window.addEventListener('resize', () => {
+                if (document.body.contains(container)) { // 确保容器仍在DOM中。
+                    camera.aspect = container.clientWidth / container.clientHeight; // 更新相机宽高比。
+                    camera.updateProjectionMatrix(); // 更新相机投影矩阵。
+                    renderer.setSize(container.clientWidth, container.clientHeight); // 更新渲染器尺寸。
+                }
+            }, false);
+
+            // **第十一步：启动动画循环**
+            animate(); // 调用动画循环函数，开始持续渲染3D场景。
+            console.log("3D 可视化环境初始化并渲染完成。"); // 控制台输出，确认初始化完成。
+        }
+
+        // Animation loop (动画循环函数)
+        // 这个函数会不断地被调用，以持续渲染场景和更新控制器。
+        function animate() {
+            // 如果渲染器、场景或相机未初始化，则停止动画循环，防止错误。
+            if (!renderer || !scene || !camera) return;
+            // requestAnimationFrame 是浏览器优化动画的方法，它会在浏览器下一次重绘前调用指定的回调函数，
+            // 确保动画平滑且与浏览器刷新率同步。
+            requestAnimationFrame(animate);
+            controls.update(); // 更新控制器状态（例如，处理用户鼠标拖拽、缩放）。
+            renderer.render(scene, camera); // 使用当前相机渲染场景，将 3D 内容绘制到 canvas 上。
+        }
+
+        // Highlight a specific nodule by index (高亮显示特定结节的函数)
+        // ... (此部分代码未修改，注释请参考之前的回复) ...
+        function highlightNoduleIn3D(index) {
+                // 先清除所有结节球体
+                noduleSpheres.forEach(sphere => {
+                    scene.remove(sphere);
+                });
+                noduleSpheres = [];
+
+                // 只渲染当前选中的结节
+                const nodule = analysisData.nodules[index];
+                if (nodule) {
+                    const position = nodule.position;
+                    const diameter = nodule.diameter_mm || 10.0;
+                    const noduleGeometry = new THREE.SphereGeometry(diameter / 2, 16, 16);
+                    const noduleSphere = new THREE.Mesh(noduleGeometry, highlightMaterial);
+                    noduleSphere.position.set(position[0], position[1], position[2]);
+                    scene.add(noduleSphere);
+                    noduleSpheres.push(noduleSphere);
+
+                    controls.target.copy(noduleSphere.position);
+                    controls.update();
+                }
+            }
+
+        // Clear nodule highlight (清除结节高亮的函数)
+        function clearNoduleHighlightIn3D() {
+                noduleSpheres.forEach(sphere => {
+                    scene.remove(sphere);
+                });
+                noduleSpheres = [];
+            }
+
+        // Clear all 3D objects and dispose of renderer (清理所有 3D 对象并销毁渲染器的函数)
+        function clear3DVisualization() {
+            if (renderer) {
+                renderer.dispose();
+                while(threeJsContainer.firstChild) {
+                    threeJsContainer.removeChild(threeJsContainer.firstChild);
+                }
+                scene = null;
+                camera = null;
+                renderer = null;
+                controls = null;
+                lungMesh = null;
+                noduleSpheres = [];
+                console.log("3D 可视化区域已清空和销毁。");
+            }
+        }
+
+        // Initialize 3D scene on page load (No change here, still happens implicitly after analysis)
+        window.addEventListener('load', () => {
+            // init3DViewer will be called only after analysis is complete with actual data
+            // No need to call init3DViewer here on load.
+        });
+    </script>
+</body>
+</html>
